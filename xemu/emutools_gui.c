@@ -58,10 +58,10 @@ struct xemugui_descriptor_st {
 	int	(*popup)( const struct menu_st desc[] );
 };
 
-#if defined(HAVE_GTK3)
+#if defined(HAVE_GTK3) && !defined(__APPLE__)
 #	include "xemu/gui/gtk.c"
-//#elif defined(__APPLE__)
-//#	include "xemu/gui/osx.c"
+#elif defined(__APPLE__)
+#	include "xemu/gui/macos.c"
 #elif defined(_WIN32)
 #	include "xemu/gui/windows.c"
 #endif
@@ -71,13 +71,13 @@ struct xemugui_descriptor_st {
 static const struct xemugui_descriptor_st *current_gui = NULL;
 
 static const struct xemugui_descriptor_st *xemugui_descriptor_list[] = {
-//#if defined(__APPLE__)
-//	&xemuosxgui_descriptor,
-//#endif
+#if defined(__APPLE__)
+	&xemumacosgui_descriptor,
+#endif
 #if defined (_WIN32)
 	&xemuwingui_descriptor,
 #endif
-#if defined(HAVE_GTK3)
+#if defined(HAVE_GTK3) && !defined(__APPLE__)
 	&xemugtkgui_descriptor,
 #endif
 //	&xemuosdgui_descriptor,
