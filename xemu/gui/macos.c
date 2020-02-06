@@ -20,6 +20,9 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA */
 static id auto_release_pool;
 static id application;
 
+const NSFileHandlingPanelOKButton = 1;
+const NSFileHandlingPanelCancelButton = 0;
+
 // New Apple SDKs objc_msgSend prototype changed to *force* callers
 // to cast to proper types!. So this is ugly, but works.
 //
@@ -30,6 +33,7 @@ typedef void (* PFN_OBJC_MSGSEND_VV) (id, SEL);
 typedef id   (* PFN_OBJC_MSGSEND_IDV)(id, SEL);
 typedef void (* PFN_OBJC_MSGSEND_VID)(id, SEL, id);
 typedef id   (* PFN_OBJC_MSGSEND_IDID)(id, SEL, id);
+typedef id   (* PFN_OBJC_MSGSEND_IDUINT)(id, SEL, unsigned long);
 typedef void (* PFN_OBJC_MSGSEND_VBOOL)(id, SEL, BOOL);
 typedef void (* PFN_OBJC_MSGSEND_VID2)(id, SEL, id, id);
 typedef void (* PFN_OBJC_MSGSEND_VID3)(id, SEL, id, id, id);
@@ -37,11 +41,13 @@ typedef BOOL (* PFN_OBJC_MSGSEND_BOOLID3)(id, SEL, id, id, id);
 typedef BOOL (* PFN_OBJC_MSGSEND_BOOLIDSELID)(id, SEL, id, SEL, id);
 typedef id   (* PFN_OBJC_MSGSEND_IDIDSELID)(id, SEL, id, SEL, id);
 typedef id   (* PFN_OBJC_MSGSEND_IDSTR)(id, SEL, const char*);
+typedef void (* PFN_OBJC_MSGSEND_VSTR) (id, SEL, const char*);
 
 static PFN_OBJC_MSGSEND_VV  		pfn_objc_msgsend_vv  = 		(PFN_OBJC_MSGSEND_VV)  objc_msgSend; 
 static PFN_OBJC_MSGSEND_IDV 		pfn_objc_msgsend_idv = 		(PFN_OBJC_MSGSEND_IDV) objc_msgSend; 
 static PFN_OBJC_MSGSEND_VID 		pfn_objc_msgsend_vid = 		(PFN_OBJC_MSGSEND_VID) objc_msgSend;
 static PFN_OBJC_MSGSEND_IDID 		pfn_objc_msgsend_idid = 	(PFN_OBJC_MSGSEND_IDID) objc_msgSend;
+static PFN_OBJC_MSGSEND_IDUINT		pfn_objc_msgsend_iduint = 	(PFN_OBJC_MSGSEND_IDUINT) objc_msgSend;
 static PFN_OBJC_MSGSEND_VBOOL 		pfn_objc_msgsend_vbool = 	(PFN_OBJC_MSGSEND_VBOOL) objc_msgSend;
 static PFN_OBJC_MSGSEND_VID2 		pfn_objc_msgsend_vid2 =		(PFN_OBJC_MSGSEND_VID2)  objc_msgSend;
 static PFN_OBJC_MSGSEND_VID3 		pfn_objc_msgsend_vid3 =		(PFN_OBJC_MSGSEND_VID3)  objc_msgSend;
@@ -49,6 +55,7 @@ static PFN_OBJC_MSGSEND_BOOLID3 	pfn_objc_msgsend_bid3 =		(PFN_OBJC_MSGSEND_BOOL
 static PFN_OBJC_MSGSEND_BOOLIDSELID pfn_objc_msgsend_bidselid = (PFN_OBJC_MSGSEND_BOOLIDSELID)objc_msgSend;
 static PFN_OBJC_MSGSEND_IDIDSELID   pfn_objc_msgsend_ididselid =(PFN_OBJC_MSGSEND_IDIDSELID)objc_msgSend;
 static PFN_OBJC_MSGSEND_IDSTR 		pfn_objc_msgsend_idstr = 	(PFN_OBJC_MSGSEND_IDSTR) objc_msgSend;
+static PFN_OBJC_MSGSEND_VSTR 		pfn_objc_msgsend_vstr = 	(PFN_OBJC_MSGSEND_VSTR) objc_msgSend;
 
 static void _xemumacgui_menu_action_handler(id self, SEL selector, id sender) 
 {
@@ -138,9 +145,31 @@ static int xemumacgui_popup(const struct menu_st desc[])
     return 0;
 }
 
-static int xemumacgui_file_selector(void) 
+static int xemumacgui_file_selector(int dialog_mode, const char *dialog_title, char *default_dir, char *selected, int path_max_size )
 {
-	return 0;
+	*selected = '\0';
+	id open_panel = pfn_objc_msgsend_idv((id) objc_getClass("NSOpenPanel"), sel_registerName("openPanel"));
+	pfn_objc_msgsend_vv(open_panel, sel_registerName("autorelease"));
+
+	pfn_objc_msgsend_vbool(open_panel, sel_registerName("setCanChooseDirectories:"), NO);
+	pfn_objc_msgsend_vbool(open_panel, sel_registerName("setAllowsMultipleSelection:"), NO);
+	pfn_objc_msgsend_vid(open_panel, sel_registerName("title"), 
+		pfn_objc_msgsend_idstr((id) objc_getClass("NSString"), sel_registerName("stringWithUTF8String:"), dialog_title));
+
+	id panel_result = pfn_objc_msgsend_idv(open_panel, sel_registerName("runModal"));
+	if (panel_result == NSFileHandlingPanelOKButton)
+	{
+		DEBUGPRINT("GUI: macOS panel OK button pressed" NL );
+		id url_array = pfn_objc_msgsend_idv(open_panel, sel_registerName("URLs"));
+		id filename_url = pfn_objc_msgsend_iduint(url_array, sel_registerName("objectAtIndex:"), 0);
+		const char* filename = (const char*)pfn_objc_msgsend_idv(filename_url, sel_registerName("fileSystemRepresentation"));
+		strcpy(selected, filename);
+		store_dir_from_file_selection(default_dir, filename, dialog_mode);
+
+		return 0;
+	}
+	
+	return 1;
 }
 
 static const struct xemugui_descriptor_st xemumacosgui_descriptor = {
