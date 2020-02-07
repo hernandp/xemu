@@ -31,7 +31,9 @@ const unsigned long NSFileHandlingPanelCancelButton = 0;
 // to cast to proper types!. So this is ugly, but works.
 //
 
-// Function pointer name format: PFN_OBJC_MSGSEND_(rettype)(parmtypes)
+// Name format: PFN_OBJC_MSGSEND_rettype[_param0t_param1_t ... paramN_t]
+// 
+// Return: V = void  I = id  B = bool 
 
 typedef void (* PFN_OBJC_MSGSEND_VV) (id, SEL);
 typedef id   (* PFN_OBJC_MSGSEND_IDV)(id, SEL);
@@ -129,7 +131,14 @@ static int xemumacgui_init(void)
 }
 
 static int xemumacgui_popup(const struct menu_st desc[]) 
-{ 
+{
+	// If the SDL window is not active, make this right-click to do application activation.
+	//
+	if ( ! (((id(*)(id,SEL))objc_msgSend) (application, sel_registerName("mainWindow"))))
+	{
+		((void(*)(id,SEL,BOOL))objc_msgSend) (application, sel_registerName("activateIgnoringOtherApps:"), YES);
+		return 0;
+	}
 	id ui_menu = _xemumacgui_r_menu_builder(desc);
 	if (!ui_menu)
 	{
@@ -149,12 +158,12 @@ static int xemumacgui_file_selector(int dialog_mode, const char *dialog_title, c
 	id open_panel = pfn_objc_msgsend_idv((id) objc_getClass("NSOpenPanel"), sel_registerName("openPanel"));
 	pfn_objc_msgsend_vv(open_panel, sel_registerName("autorelease"));
 
-	id main_window = pfn_objc_msgsend_idv((id) objc_getClass("NSApp"), sel_registerName("mainWindow"));
-	DEBUGPRINT("0x%x", main_window);
+	id main_window = pfn_objc_msgsend_idv(application, sel_registerName("mainWindow"));
+	DEBUGPRINT("mainWindow = 0x%x", main_window);
 
 	pfn_objc_msgsend_vbool(open_panel, sel_registerName("setCanChooseDirectories:"), NO);
 	pfn_objc_msgsend_vbool(open_panel, sel_registerName("setAllowsMultipleSelection:"), NO);
-	pfn_objc_msgsend_vid(open_panel, sel_registerName("title"), 
+	pfn_objc_msgsend_vid(open_panel, sel_registerName("setMessage:"), 
 		pfn_objc_msgsend_idstr((id) objc_getClass("NSString"), sel_registerName("stringWithUTF8String:"), dialog_title));
 
 	id panel_result = pfn_objc_msgsend_idv(open_panel, sel_registerName("runModal"));
