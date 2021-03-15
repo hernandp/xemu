@@ -1,7 +1,7 @@
-/* A work-in-progess Mega-65 (Commodore-65 clone origins) emulator
+/* A work-in-progess MEGA65 (Commodore 65 clone origins) emulator
    Part of the Xemu project, please visit: https://github.com/lgblgblgb/xemu
    I/O decoding part (used by memory_mapper.h and DMA mainly)
-   Copyright (C)2016-2018 LGB (Gábor Lénárt) <lgblgblgb@gmail.com>
+   Copyright (C)2016-2021 LGB (Gábor Lénárt) <lgblgblgb@gmail.com>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -25,17 +25,18 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA */
 #include "xemu/emutools_hid.h"
 //#include "xemu/cpu65.h"
 #include "vic4.h"
+#include "vic4_palette.h"
 #include "sdcard.h"
 #include "hypervisor.h"
 #include "ethernet65.h"
 #include "input_devices.h"
+#include "audio65.h"
 
 
 int    fpga_switches = 0;		// State of FPGA board switches (bits 0 - 15), set switch 12 (hypervisor serial output)
 Uint8  D6XX_registers[0x100];		// mega65 specific D6XX range, excluding the UART part (not used here!)
 Uint8  D7XX[0x100];			// FIXME: hack for future M65 stuffs like ALU! FIXME: no snapshot on these!
 struct Cia6526 cia1, cia2;		// CIA emulation structures for the two CIAs
-struct SidEmulation sid1, sid2;		// the two SIDs
 static int mouse_x = 0, mouse_y = 0;	// for our primitive C1351 mouse emulation
 int    cpu_linear_memory_addressing_is_enabled = 0;	// used by the CPU emu as well!
 static int bigmult_valid_result = 0;
@@ -49,35 +50,46 @@ int port_d607 = 0xFF;	// ugly hack to be able to read extra char row of C65
 	do { DEBUG("IO: NOT IMPLEMENTED write (emulator lacks feature), %s $%04X with data $%02X" NL, func, addr, data); \
 	return; } while(0)
 
-// Address of the "big" multiplier within the $D7XX area (byte only)
-#define BIGMULT_ADDR	0x70
-
-
 
 static void update_hw_multiplier ( void )
 {
-	D7XX[BIGMULT_ADDR + 3] &= 0x01;
-	D7XX[BIGMULT_ADDR + 6] &= 0x03;
-	D7XX[BIGMULT_ADDR + 7] =  0x00;
-	register Uint64 result = (Uint64)(
-		((Uint32) D7XX[BIGMULT_ADDR + 0]      ) |
-		((Uint32) D7XX[BIGMULT_ADDR + 1] <<  8) |
-		((Uint32) D7XX[BIGMULT_ADDR + 2] << 16) |
-		((Uint32) D7XX[BIGMULT_ADDR + 3] << 24)
-	) * (Uint64)(
-		((Uint32) D7XX[BIGMULT_ADDR + 4]      ) |
-		((Uint32) D7XX[BIGMULT_ADDR + 5] <<  8) |
-		((Uint32) D7XX[BIGMULT_ADDR + 6] << 16) |
-		((Uint32) D7XX[BIGMULT_ADDR + 7] << 24)
+	Uint32 input_a = (Uint64)(
+		((Uint32) D7XX[0x70]      ) |
+		((Uint32) D7XX[0x71] <<  8) |
+		((Uint32) D7XX[0x72] << 16) |
+		((Uint32) D7XX[0x73] << 24)
 	);
-	D7XX[BIGMULT_ADDR + 0x8] = (result      ) & 0xFF;
-	D7XX[BIGMULT_ADDR + 0x9] = (result >>  8) & 0xFF;
-	D7XX[BIGMULT_ADDR + 0xA] = (result >> 16) & 0xFF;
-	D7XX[BIGMULT_ADDR + 0xB] = (result >> 24) & 0xFF;
-	D7XX[BIGMULT_ADDR + 0xC] = (result >> 32) & 0xFF;
-	D7XX[BIGMULT_ADDR + 0xD] = (result >> 40) & 0xFF;
-	D7XX[BIGMULT_ADDR + 0xE] = 0;
-	D7XX[BIGMULT_ADDR + 0xF] = 0;
+	Uint32 input_b = (Uint64)(
+		((Uint32) D7XX[0x74]      ) |
+		((Uint32) D7XX[0x75] <<  8) |
+		((Uint32) D7XX[0x76] << 16) |
+		((Uint32) D7XX[0x77] << 24)
+	);
+	if (XEMU_LIKELY(input_b)) {
+		// We really don't want to divide by zero.
+		// It seems the policy on MEGA65 is not change the result
+		// registers AT ALL, if you try to divide by zero.
+		// So we only check if input_b != 0 and do the thing here then!
+		Uint32 div_quotient = input_a / input_b;
+		Uint32 div_reminder = input_a % input_b;
+		D7XX[0x68] = (div_reminder      ) & 0xFF;
+		D7XX[0x69] = (div_reminder >>  8) & 0xFF;
+		D7XX[0x6A] = (div_reminder >> 16) & 0xFF;
+		D7XX[0x6B] = (div_reminder >> 24) & 0xFF;
+		D7XX[0x6C] = (div_quotient      ) & 0xFF;
+		D7XX[0x6D] = (div_quotient >>  8) & 0xFF;
+		D7XX[0x6E] = (div_quotient >> 16) & 0xFF;
+		D7XX[0x6F] = (div_quotient >> 24) & 0xFF;
+	}
+	Uint64 mult_result = (Uint64)input_a * (Uint64)input_b;
+	D7XX[0x78] = (mult_result      ) & 0xFF;
+	D7XX[0x79] = (mult_result >>  8) & 0xFF;
+	D7XX[0x7A] = (mult_result >> 16) & 0xFF;
+	D7XX[0x7B] = (mult_result >> 24) & 0xFF;
+	D7XX[0x7C] = (mult_result >> 32) & 0xFF;
+	D7XX[0x7D] = (mult_result >> 40) & 0xFF;
+	D7XX[0x7E] = (mult_result >> 48) & 0xFF;
+	D7XX[0x7F] = (mult_result >> 56) & 0xFF;
 	bigmult_valid_result = 1;
 }
 
@@ -123,10 +135,13 @@ Uint8 io_read ( unsigned int addr )
 		case 0x11:	// $D100-$D1FF ~ C65 I/O mode
 		case 0x12:	// $D200-$D2FF ~ C65 I/O mode
 		case 0x13:	// $D300-$D3FF ~ C65 I/O mode
+			return 0xFF;	// FIXME: AFAIK C65 does not allow to read palette register back, however M65 I/O mode does allow (?)
 		case 0x31:	// $D100-$D1FF ~ M65 I/O mode
+			return vic4_read_palette_reg_red(addr);	// function takes care using only 8 low bits of addr, no need to do here
 		case 0x32:	// $D200-$D2FF ~ M65 I/O mode
+			return vic4_read_palette_reg_green(addr);
 		case 0x33:	// $D300-$D3FF ~ M65 I/O mode
-			return 0xFF;	// FIXME: check, if applies: palette register entries are write-only, in both of C65 and M65 modes??
+			return vic4_read_palette_reg_blue(addr);
 		/* ------------------------------------------------ */
 		/* $D400-$D7FF: SID, SID+UART+DMA, SID+UART+DMA+M65 */
 		/* ------------------------------------------------ */
@@ -180,6 +195,8 @@ Uint8 io_read ( unsigned int addr )
 					return hwa_kbd_get_last();
 				case 0x11:				// modifier keys on kbd being used
 					return hwa_kbd_get_modifiers();
+				case 0x13:				// $D613: direct access to the kbd matrix, read selected row (set by writing $D614), bit 0 = key pressed
+					return kbd_directscan_query(D6XX_registers[0x14]);	// for further explanations please see this function in input_devices.c
 				default:
 					DEBUG("MEGA65: reading Mega65 specific I/O @ $D6%02X result is $%02X" NL, addr, D6XX_registers[addr]);
 					return D6XX_registers[addr];
@@ -190,8 +207,11 @@ Uint8 io_read ( unsigned int addr )
 		case 0x37:	// $D700-$D7FF ~ M65 I/O mode
 			// FIXME: this is probably very bad! I guess DMA does not decode for every 16 addresses ... Proposed fix is here:
 			addr &= 0xFF;
-			if (addr < 16)
+			if (addr < 15)		// FIXME!!!! 0x0F was part of DMA reg array, but it seems now used by divisor busy stuff??
 				return dma_read_reg(addr & 0xF);
+			if (addr == 0x0F)
+				return 0;	// FIXME: D70F bit 7 = 32/32 bits divisor busy flag, bit 6 = 32*32 mult busy flag. We're never busy, so the zero. But the OTHER bits??? Any purpose of those??
+			// ;) FIXME this is LAZY not to decode if we need to update bigmult at all ;-P
 			if (XEMU_UNLIKELY(!bigmult_valid_result))
 				update_hw_multiplier();
 			return D7XX[addr];
@@ -314,14 +334,22 @@ void io_write ( unsigned int addr, Uint8 data )
 			}
 			RETURN_ON_IO_WRITE_NOT_IMPLEMENTED("RAM expansion controller");
 		case 0x11:	// $D100-$D1FF ~ C65 I/O mode
+			vic3_write_palette_reg_red(addr, data);		// function takes care using only 8 low bits of addr, no need to do here
+			return;
 		case 0x12:	// $D200-$D2FF ~ C65 I/O mode
+			vic3_write_palette_reg_green(addr, data);
+			return;
 		case 0x13:	// $D300-$D3FF ~ C65 I/O mode
-			vic3_write_palette_reg(addr - 0x1100, data);
+			vic3_write_palette_reg_blue(addr, data);
 			return;
 		case 0x31:	// $D100-$D1FF ~ M65 I/O mode
+			vic4_write_palette_reg_red(addr, data);
+			return;
 		case 0x32:	// $D200-$D2FF ~ M65 I/O mode
+			vic4_write_palette_reg_green(addr, data);
+			return;
 		case 0x33:	// $D300-$D3FF ~ M65 I/O mode
-			vic4_write_palette_reg(addr - 0x3100, data);
+			vic4_write_palette_reg_blue(addr, data);
 			return;
 		/* ------------------------------------------------ */
 		/* $D400-$D7FF: SID, SID+UART+DMA, SID+UART+DMA+M65 */
@@ -407,7 +435,8 @@ void io_write ( unsigned int addr, Uint8 data )
 			addr &= 0xFF;
 			if (addr < 16)
 				dma_write_reg(addr & 0xF, data);
-			else if (XEMU_UNLIKELY((addr & 0xF0) == BIGMULT_ADDR))
+			//else if (XEMU_UNLIKELY((addr & 0xF0) == BIGMULT_ADDR))
+			else if (addr >= 0x68 && addr <= 0x7F)
 				bigmult_valid_result = 0;
 			D7XX[addr] = data;
 			return;
